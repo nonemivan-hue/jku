@@ -218,7 +218,7 @@ def process_data(supplier_df, upload_df, log_callback=None):
         if kod_value in supplier_dict:
             supplier_row = supplier_dict[kod_value]
             
-            # Переносим данные SUM_N, ZADOLG, MZADOLG
+            # Переносим данные SUM_N, ZADOLG, MZADOLG и обрабатываем DOGOVOR
             for i in range(1, 17):
                 sum_col = f'SUM_N{i}'
                 zadolg_col = f'ZADOLG{i}'
@@ -226,15 +226,49 @@ def process_data(supplier_df, upload_df, log_callback=None):
                 glava_col = f'GLAVA{i}'
                 dogovor_col = f'DOGOVOR{i}'
                 
-                # Переносим данные если столбцы существуют
-                if sum_col in supplier_df.columns and sum_col in result_df.columns:
-                    result_df.loc[idx, sum_col] = supplier_row.get(sum_col, 0)
+                # Переносим данные из файла поставщика только если столбцы существуют в обоих файлах
+                supplier_sum_val = 0
+                supplier_zadolg_val = 0
+                supplier_mzadolg_val = 0
                 
-                if zadolg_col in supplier_df.columns and zadolg_col in result_df.columns:
-                    result_df.loc[idx, zadolg_col] = supplier_row.get(zadolg_col, 0)
+                if sum_col in supplier_df.columns:
+                    supplier_sum_val = supplier_row.get(sum_col, 0)
                 
-                if mzadolg_col in supplier_df.columns and mzadolg_col in result_df.columns:
-                    result_df.loc[idx, mzadolg_col] = supplier_row.get(mzadolg_col, 0)
+                if zadolg_col in supplier_df.columns:
+                    supplier_zadolg_val = supplier_row.get(zadolg_col, 0)
+                
+                if mzadolg_col in supplier_df.columns:
+                    supplier_mzadolg_val = supplier_row.get(mzadolg_col, 0)
+                
+                # Обновляем только целевые столбцы в файле загрузки
+                if sum_col in result_df.columns:
+                    result_df.loc[idx, sum_col] = supplier_sum_val
+                
+                if mzadolg_col in result_df.columns:
+                    result_df.loc[idx, mzadolg_col] = supplier_mzadolg_val
+                
+                # Обработка ZADOLG: ставим 1 если MZADOLG > 0 или не целое число
+                if zadolg_col in result_df.columns and mzadolg_col in result_df.columns:
+                    mzadolg_value = result_df.loc[idx, mzadolg_col]
+                    
+                    # Проверяем является ли значение числом
+                    try:
+                        mzadolg_num = float(mzadolg_value) if pd.notna(mzadolg_value) else 0
+                        
+                        # Ставим 1 если:
+                        # 1. MZADOLG > 0
+                        # 2. MZADOLG содержит дробную часть (не целое число)
+                        if mzadolg_num > 0 or (mzadolg_num != int(mzadolg_num)):
+                            result_df.loc[idx, zadolg_col] = 1
+                        else:
+                            result_df.loc[idx, zadolg_col] = 0
+                    except (ValueError, TypeError):
+                        # Если не число, проверяем наличие запятой в строковом представлении
+                        mzadolg_str = str(mzadolg_value)
+                        if ',' in mzadolg_str or '.' in mzadolg_str:
+                            result_df.loc[idx, zadolg_col] = 1
+                        else:
+                            result_df.loc[idx, zadolg_col] = 0
                 
                 # Проверка для DOGOVOR: если GLAVA и SUM_N имеют значения, ставим 1, иначе 0
                 if dogovor_col in result_df.columns:
@@ -253,7 +287,7 @@ def process_data(supplier_df, upload_df, log_callback=None):
             # KOD не найден в данных поставщика
             missing_kods.append(kod_value)
             
-            # Устанавливаем 0 в поля SUM_N, ZADOLG, MZADOLG
+            # Устанавливаем 0 в поля SUM_N, ZADOLG, MZADOLG, DOGOVOR
             for i in range(1, 17):
                 sum_col = f'SUM_N{i}'
                 zadolg_col = f'ZADOLG{i}'
@@ -262,10 +296,11 @@ def process_data(supplier_df, upload_df, log_callback=None):
                 
                 if sum_col in result_df.columns:
                     result_df.loc[idx, sum_col] = 0
-                if zadolg_col in result_df.columns:
-                    result_df.loc[idx, zadolg_col] = 0
                 if mzadolg_col in result_df.columns:
                     result_df.loc[idx, mzadolg_col] = 0
+                if zadolg_col in result_df.columns:
+                    # Для ZADOLG тоже ставим 0 так как MZADOLG = 0
+                    result_df.loc[idx, zadolg_col] = 0
                 if dogovor_col in result_df.columns:
                     result_df.loc[idx, dogovor_col] = 0
     
