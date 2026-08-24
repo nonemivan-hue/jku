@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Программа для обработки данных от поставщика и загрузки в комплекс.
+Поддерживает форматы Excel (.xlsx, .xls) и PDF (для извлечения таблиц).
+"""
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+
+def load_file(file_path):
+    """
+    Загрузка файла (Excel или CSV). 
+    Для PDF требуется дополнительная библиотека pdfplumber.
+    """
+    file_ext = Path(file_path).suffix.lower()
+    
+    if file_ext in ['.xlsx', '.xls']:
+        return pd.read_excel(file_path)
+    elif file_ext == '.csv':
+        return pd.read_csv(file_path)
+    elif file_ext == '.pdf':
+        try:
+            import pdfplumber
+            tables = []
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    table = page.extract_table()
+                    if table:
+                        tables.append(table)
+            if not tables:
+                raise ValueError("Таблицы не найдены в PDF файле")
+            # Объединяем все таблицы и создаем DataFrame
+            all_rows = []
+            for table in tables:
+                all_rows.extend(table)
+            if all_rows:
+                df = pd.DataFrame(all_rows[1:], columns=all_rows[0])
+                return df
+            else:
+                raise ValueError("Не удалось извлечь данные из PDF")
+        except ImportError:
+            print("Для работы с PDF установите библиотеку: pip install pdfplumber")
+            raise
+    else:
+        raise ValueError(f"Неподдерживаемый формат файла: {file_ext}")
+
+
+def process_data(supplier_df, upload_df):
+    """
+    Обработка данных согласно требованиям:
+    1. Перенос данных из столбцов SUM_N1..16, ZADOLG1..16, MZADOLG1..16
+    2. Проверка GLAVA и SUM_N для установки DOGOVOR
+    3. Добавление столбца "Определять тариф по площади"
+    4. Соединение по KOD
+    """
+    
+    # Создаем копию файла для загрузки
+    result_df = upload_df.copy()
+    
+    # Проверяем наличие столбца KOD в файле для загрузки
+    if 'KOD' not in upload_df.columns and 'kod' not in [c.lower() for c in upload_df.columns]:
+        # Ищем столбец с похожим названием (регистронезависимо)
+        kod_col = None
+        for col in upload_df.columns:
+            if col.lower() in ['kod', 'code', 'код', 'kodu']:
+                kod_col = col
+                break
+        if kod_col is None:
+            print("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
+            return None
+    
+    # Нормализуем имена столбцов (приводим к верхнему регистру для удобства)
+    upload_df.columns = [str(c).upper().strip() for c in upload_df.columns]
+    supplier_df.columns = [str(c).upper().strip() for c in supplier_df.columns]
+    result_df.columns = [str(c).upper().strip() for c in result_df.columns]
+    
+    # Определяем имя столбца KOD
+    kod_col_upload = 'KOD' if 'KOD' in upload_df.columns else None
+    if kod_col_upload is None:
+        for col in upload_df.columns:
+            if col.upper() == 'KOD':
+                kod_col_upload = col
+                break
+    
+    kod_col_supplier = 'KOD' if 'KOD' in supplier_df.columns else None
+    if kod_col_supplier is None:
+        for col in supplier_df.columns:
+            if col.upper() == 'KOD':
+                kod_col_supplier = col
+                break
+    
+    if kod_col_upload is None:
+        print("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
+        return None
+    
+    if kod_col_supplier is None:
+        print("Предупреждение: столбец KOD не найден в файле 'Данные от поставщика'. Данные не будут перенесены.")
+        # Добавляем столбец "Определять тариф по площади" со значением 1
+        result_df['ОПРЕДЕЛЯТЬ ТАРИФ ПО ПЛОЩАДИ'] = 1
+        return result_df
+    
+    # Списки столбцов для обработки
+    sum_cols = [f'SUM_N{i}' for i in range(1, 17)]
+    zadolg_cols = [f'ZADOLG{i}' for i in range(1, 17)]
+    mzadolg_cols = [f'MZADOLG{i}' for i in range(1, 17)]
+    glava_cols = [f'GLAVA{i}' for i in range(1, 17)]
+    dogovor_cols = [f'DOGOVOR{i}' for i in range(1, 17)]
+    
+    # Проверяем какие столбцы существуют в файлах
+    existing_sum_supplier = [col for col in sum_cols if col in supplier_df.columns]
+    existing_zadolg_supplier = [col for col in zadolg_cols if col in supplier_df.columns]
+    existing_mzadolg_supplier = [col for col in mzadolg_cols if col in supplier_df.columns]
+    existing_glava_supplier = [col for col in glava_cols if col in supplier_df.columns]
+    
+    # Создаем словарь для маппинга данных по KOD
+    supplier_dict = {}
+    for idx, row in supplier_df.iterrows():
+        kod_value = row[kod_col_supplier]
+        if pd.notna(kod_value):
+            supplier_dict[kod_value] = row
+    
+    missing_kods = []
+    
+    # Обрабатываем каждую строку в файле для загрузки
+    for idx in result_df.index:
+        kod_value = result_df.loc[idx, kod_col_upload]
+        
+        # Проверяем наличие KOD в файле для загрузки
+        if pd.isna(kod_value):
+            continue
+        
+        # Ищем соответствующую запись в данных поставщика
+        if kod_value in supplier_dict:
+            supplier_row = supplier_dict[kod_value]
+            
+            # Переносим данные SUM_N, ZADOLG, MZADOLG
+            for i in range(1, 17):
+                sum_col = f'SUM_N{i}'
+                zadolg_col = f'ZADOLG{i}'
+                mzadolg_col = f'MZADOLG{i}'
+                glava_col = f'GLAVA{i}'
+                dogovor_col = f'DOGOVOR{i}'
+                
+                # Переносим данные если столбцы существуют
+                if sum_col in supplier_df.columns and sum_col in result_df.columns:
+                    result_df.loc[idx, sum_col] = supplier_row.get(sum_col, 0)
+                
+                if zadolg_col in supplier_df.columns and zadolg_col in result_df.columns:
+                    result_df.loc[idx, zadolg_col] = supplier_row.get(zadolg_col, 0)
+                
+                if mzadolg_col in supplier_df.columns and mzadolg_col in result_df.columns:
+                    result_df.loc[idx, mzadolg_col] = supplier_row.get(mzadolg_col, 0)
+                
+                # Проверка для DOGOVOR: если GLAVA и SUM_N имеют значения, ставим 1, иначе 0
+                if dogovor_col in result_df.columns:
+                    glava_value = result_df.loc[idx, glava_col] if glava_col in result_df.columns else None
+                    sum_value = result_df.loc[idx, sum_col] if sum_col in result_df.columns else None
+                    
+                    # Проверяем наличие значений (не NaN и не 0)
+                    glava_has_value = pd.notna(glava_value) and glava_value != '' and glava_value != 0
+                    sum_has_value = pd.notna(sum_value) and sum_value != '' and sum_value != 0
+                    
+                    if glava_has_value and sum_has_value:
+                        result_df.loc[idx, dogovor_col] = 1
+                    else:
+                        result_df.loc[idx, dogovor_col] = 0
+        else:
+            # KOD не найден в данных поставщика
+            missing_kods.append(kod_value)
+            
+            # Устанавливаем 0 в поля SUM_N, ZADOLG, MZADOLG
+            for i in range(1, 17):
+                sum_col = f'SUM_N{i}'
+                zadolg_col = f'ZADOLG{i}'
+                mzadolg_col = f'MZADOLG{i}'
+                dogovor_col = f'DOGOVOR{i}'
+                
+                if sum_col in result_df.columns:
+                    result_df.loc[idx, sum_col] = 0
+                if zadolg_col in result_df.columns:
+                    result_df.loc[idx, zadolg_col] = 0
+                if mzadolg_col in result_df.columns:
+                    result_df.loc[idx, mzadolg_col] = 0
+                if dogovor_col in result_df.columns:
+                    result_df.loc[idx, dogovor_col] = 0
+    
+    # Выводим сообщения об отсутствующих KOD
+    if missing_kods:
+        for kod in missing_kods:
+            print(f"Код семьи не найден: {kod}")
+    
+    # Добавляем столбец "Определять тариф по площади" со значением 1
+    result_df['ОПРЕДЕЛЯТЬ ТАРИФ ПО ПЛОЩАДИ'] = 1
+    
+    return result_df
+
+
+def main():
+    """Основная функция программы."""
+    print("=" * 60)
+    print("Программа обработки данных от поставщика")
+    print("=" * 60)
+    
+    # Запрос путей к файлам
+    print("\nЗагрузите файл 'Данные от поставщика' (Excel или PDF):")
+    supplier_file = input("Путь к файлу: ").strip()
+    
+    print("\nЗагрузите файл 'Данные для загрузки в комплекс' (Excel):")
+    upload_file = input("Путь к файлу: ").strip()
+    
+    # Проверка существования файлов
+    if not os.path.exists(supplier_file):
+        print(f"Ошибка: Файл '{supplier_file}' не найден!")
+        return
+    
+    if not os.path.exists(upload_file):
+        print(f"Ошибка: Файл '{upload_file}' не найден!")
+        return
+    
+    # Загрузка файлов
+    print("\nЗагрузка файлов...")
+    try:
+        supplier_df = load_file(supplier_file)
+        print(f"✓ Файл поставщика загружен: {len(supplier_df)} записей")
+    except Exception as e:
+        print(f"Ошибка при загрузке файла поставщика: {e}")
+        return
+    
+    try:
+        upload_df = load_file(upload_file)
+        print(f"✓ Файл для загрузки загружен: {len(upload_df)} записей")
+    except Exception as e:
+        print(f"Ошибка при загрузке файла для загрузки: {e}")
+        return
+    
+    # Обработка данных
+    print("\nОбработка данных...")
+    result_df = process_data(supplier_df, upload_df)
+    
+    if result_df is None:
+        print("Ошибка при обработке данных!")
+        return
+    
+    # Формирование имени выходного файла
+    upload_file_path = Path(upload_file)
+    output_filename = f"Данные для загрузки_{upload_file_path.stem}_processed{upload_file_path.suffix}"
+    output_path = Path(upload_file_path.parent) / output_filename
+    
+    # Сохранение результата
+    print(f"\nСохранение результата в: {output_path}")
+    try:
+        if output_path.suffix.lower() in ['.xlsx', '.xls']:
+            result_df.to_excel(output_path, index=False)
+        else:
+            result_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        print(f"✓ Файл успешно сохранен: {output_path}")
+    except Exception as e:
+        print(f"Ошибка при сохранении файла: {e}")
+        return
+    
+    print("\n" + "=" * 60)
+    print("Обработка завершена успешно!")
+    print(f"Результат: {output_path}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
