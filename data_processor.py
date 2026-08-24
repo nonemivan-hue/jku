@@ -30,14 +30,37 @@ def load_file(file_path):
     elif file_ext == '.dbf':
         try:
             from simpledbf import Dbf5
-            dbf = Dbf5(file_path)
-            return dbf.to_dataframe()
+            # Пытаемся определить кодировку, пробуя разные варианты
+            encodings_to_try = ['cp866', 'cp1251', 'latin1', 'utf-8']
+            df = None
+            
+            for encoding in encodings_to_try:
+                try:
+                    dbf = Dbf5(file_path, encoding=encoding)
+                    df = dbf.to_dataframe()
+                    print(f"DBF файл успешно прочитан с кодировкой: {encoding}")
+                    break
+                except UnicodeDecodeError:
+                    continue
+                except Exception as e:
+                    # Если ошибка не связана с кодировкой, пробуем без указания кодировки
+                    if "codec" in str(e).lower() or "decode" in str(e).lower():
+                        continue
+                    else:
+                        raise
+            
+            if df is None:
+                # Если ни одна кодировка не подошла, пробуем без указания кодировки
+                dbf = Dbf5(file_path)
+                df = dbf.to_dataframe()
+            
+            return df
         except ImportError as e:
             error_msg = f"Ошибка импорта simpledbf: {str(e)}. Установите библиотеку: pip install simpledbf"
             print(error_msg)
             raise ImportError(error_msg)
         except Exception as e:
-            error_msg = f"Ошибка при чтении DBF файла: {str(e)}"
+            error_msg = f"Ошибка при чтении DBF файла: {str(e)}. Попробуйте проверить кодировку файла."
             print(error_msg)
             raise ValueError(error_msg)
     elif file_ext == '.pdf':
