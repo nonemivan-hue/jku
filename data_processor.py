@@ -172,12 +172,37 @@ def process_data(supplier_df, upload_df, log_callback=None):
     existing_mzadolg_supplier = [col for col in mzadolg_cols if col in supplier_df.columns]
     existing_glava_supplier = [col for col in glava_cols if col in supplier_df.columns]
     
-    # Создаем словарь для маппинга данных по KOD
+    # Группируем данные поставщика по KOD и выбираем максимальные значения для числовых полей
     supplier_dict = {}
     for idx, row in supplier_df.iterrows():
         kod_value = row[kod_col_supplier]
         if pd.notna(kod_value):
-            supplier_dict[kod_value] = row
+            if kod_value in supplier_dict:
+                # Если KOD уже существует, выбираем максимальные значения
+                existing_row = supplier_dict[kod_value]
+                for col in supplier_df.columns:
+                    current_val = row.get(col, 0)
+                    existing_val = existing_row.get(col, 0)
+                    
+                    # Для числовых значений выбираем максимум
+                    try:
+                        if pd.api.types.is_numeric_dtype(type(current_val)) or pd.api.types.is_numeric_dtype(type(existing_val)):
+                            # Пробуем преобразовать к числу
+                            current_num = float(current_val) if pd.notna(current_val) else 0
+                            existing_num = float(existing_val) if pd.notna(existing_val) else 0
+                            if current_num > existing_num:
+                                existing_row[col] = current_val
+                        else:
+                            # Для нечисловых значений оставляем первое непустое
+                            if pd.isna(existing_val) or existing_val == '' or existing_val is None:
+                                existing_row[col] = current_val
+                    except (ValueError, TypeError):
+                        # Если не удалось преобразовать к числу, оставляем существующее значение
+                        pass
+            else:
+                supplier_dict[kod_value] = row.to_dict()
+    
+    log(f"Загружено {len(supplier_dict)} уникальных кодов из файла поставщика")
     
     missing_kods = []
     
