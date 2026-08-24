@@ -30,8 +30,9 @@ def load_file(file_path):
     elif file_ext == '.dbf':
         try:
             from simpledbf import Dbf5
-            # Пытаемся определить кодировку, пробуя разные варианты
-            encodings_to_try = ['cp866', 'cp1251', 'latin1', 'utf-8']
+            # DBF файлы обычно используют cp866 (DOS) или cp1251 (Windows) кодировку
+            # Пробуем сначала cp866, затем cp1251
+            encodings_to_try = ['cp866', 'cp1251', 'latin1']
             df = None
             
             for encoding in encodings_to_try:
@@ -43,11 +44,19 @@ def load_file(file_path):
                 except UnicodeDecodeError:
                     continue
                 except Exception as e:
-                    # Если ошибка не связана с кодировкой, пробуем без указания кодировки
-                    if "codec" in str(e).lower() or "decode" in str(e).lower():
+                    # Если ошибка не связана с кодировкой, пробуем следующую
+                    error_str = str(e).lower()
+                    if "codec" in error_str or "decode" in error_str or "can't decode" in error_str:
                         continue
                     else:
-                        raise
+                        # Другая ошибка - пробуем без указания кодировки
+                        try:
+                            dbf = Dbf5(file_path)
+                            df = dbf.to_dataframe()
+                            print("DBF файл прочитан с кодировкой по умолчанию")
+                            break
+                        except:
+                            raise
             
             if df is None:
                 # Если ни одна кодировка не подошла, пробуем без указания кодировки
@@ -60,7 +69,7 @@ def load_file(file_path):
             print(error_msg)
             raise ImportError(error_msg)
         except Exception as e:
-            error_msg = f"Ошибка при чтении DBF файла: {str(e)}. Попробуйте проверить кодировку файла."
+            error_msg = f"Ошибка при чтении DBF файла: {str(e)}. Проверьте целостность файла и кодировку."
             print(error_msg)
             raise ValueError(error_msg)
     elif file_ext == '.pdf':
