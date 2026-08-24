@@ -1,5 +1,21 @@
-(data_processor.py is a source file, so no ignores needed)
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-```python
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
 ```
