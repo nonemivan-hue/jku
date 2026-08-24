@@ -3,6 +3,7 @@
 """
 Программа для обработки данных от поставщика и загрузки в комплекс.
 Поддерживает форматы Excel (.xlsx, .xls) и PDF (для извлечения таблиц).
+С графическим интерфейсом на базе tkinter.
 """
 
 import pandas as pd
@@ -10,6 +11,9 @@ import numpy as np
 import os
 import sys
 from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+import threading
 
 
 def load_file(file_path):
@@ -50,7 +54,7 @@ def load_file(file_path):
         raise ValueError(f"Неподдерживаемый формат файла: {file_ext}")
 
 
-def process_data(supplier_df, upload_df):
+def process_data(supplier_df, upload_df, log_callback=None):
     """
     Обработка данных согласно требованиям:
     1. Перенос данных из столбцов SUM_N1..16, ZADOLG1..16, MZADOLG1..16
@@ -58,6 +62,12 @@ def process_data(supplier_df, upload_df):
     3. Добавление столбца "Определять тариф по площади"
     4. Соединение по KOD
     """
+    
+    def log(message):
+        if log_callback:
+            log_callback(message)
+        else:
+            print(message)
     
     # Создаем копию файла для загрузки
     result_df = upload_df.copy()
@@ -71,7 +81,7 @@ def process_data(supplier_df, upload_df):
                 kod_col = col
                 break
         if kod_col is None:
-            print("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
+            log("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
             return None
     
     # Нормализуем имена столбцов (приводим к верхнему регистру для удобства)
@@ -95,11 +105,11 @@ def process_data(supplier_df, upload_df):
                 break
     
     if kod_col_upload is None:
-        print("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
+        log("Ошибка: столбец KOD не найден в файле 'Данные для загрузки'")
         return None
     
     if kod_col_supplier is None:
-        print("Предупреждение: столбец KOD не найден в файле 'Данные от поставщика'. Данные не будут перенесены.")
+        log("Предупреждение: столбец KOD не найден в файле 'Данные от поставщика'. Данные не будут перенесены.")
         # Добавляем столбец "Определять тариф по площади" со значением 1
         result_df['ОПРЕДЕЛЯТЬ ТАРИФ ПО ПЛОЩАДИ'] = 1
         return result_df
@@ -192,7 +202,7 @@ def process_data(supplier_df, upload_df):
     # Выводим сообщения об отсутствующих KOD
     if missing_kods:
         for kod in missing_kods:
-            print(f"Код семьи не найден: {kod}")
+            log(f"Код семьи не найден: {kod}")
     
     # Добавляем столбец "Определять тариф по площади" со значением 1
     result_df['ОПРЕДЕЛЯТЬ ТАРИФ ПО ПЛОЩАДИ'] = 1
@@ -200,73 +210,174 @@ def process_data(supplier_df, upload_df):
     return result_df
 
 
+class DataProcessorApp:
+    """Графический интерфейс приложения."""
+    
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Обработка данных от поставщика")
+        self.root.geometry("800x600")
+        
+        # Переменные для хранения путей к файлам
+        self.supplier_file = tk.StringVar()
+        self.upload_file = tk.StringVar()
+        self.output_file = tk.StringVar()
+        
+        self.create_widgets()
+    
+    def create_widgets(self):
+        """Создание элементов интерфейса."""
+        # Заголовок
+        title_label = tk.Label(self.root, text="Программа обработки данных", font=("Arial", 16, "bold"))
+        title_label.pack(pady=10)
+        
+        # Фрейм для выбора файлов
+        file_frame = tk.LabelFrame(self.root, text="Выбор файлов", padx=10, pady=10)
+        file_frame.pack(fill="x", padx=20, pady=10)
+        
+        # Выбор файла поставщика
+        tk.Label(file_frame, text="Файл от поставщика (Excel/PDF):").grid(row=0, column=0, sticky="w", pady=5)
+        tk.Entry(file_frame, textvariable=self.supplier_file, width=50).grid(row=0, column=1, padx=10)
+        tk.Button(file_frame, text="Обзор...", command=self.browse_supplier_file).grid(row=0, column=2)
+        
+        # Выбор файла для загрузки
+        tk.Label(file_frame, text="Файл для загрузки (Excel):").grid(row=1, column=0, sticky="w", pady=5)
+        tk.Entry(file_frame, textvariable=self.upload_file, width=50).grid(row=1, column=1, padx=10)
+        tk.Button(file_frame, text="Обзор...", command=self.browse_upload_file).grid(row=1, column=2)
+        
+        # Кнопка запуска обработки
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(pady=10)
+        self.process_btn = tk.Button(btn_frame, text="Обработать данные", command=self.start_processing, 
+                                      bg="#4CAF50", fg="white", font=("Arial", 12, "bold"), padx=20, pady=10)
+        self.process_btn.pack()
+        
+        # Лог операций
+        log_frame = tk.LabelFrame(self.root, text="Журнал операций", padx=10, pady=10)
+        log_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD)
+        self.log_text.pack(fill="both", expand=True)
+        
+        # Индикатор прогресса
+        self.progress_var = tk.BooleanVar(value=False)
+        self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
+        self.status_label.pack(pady=5)
+    
+    def browse_supplier_file(self):
+        """Выбор файла поставщика."""
+        filename = filedialog.askopenfilename(
+            title="Выберите файл от поставщика",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("PDF files", "*.pdf"), ("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if filename:
+            self.supplier_file.set(filename)
+            self.log(f"Выбран файл поставщика: {filename}")
+    
+    def browse_upload_file(self):
+        """Выбор файла для загрузки."""
+        filename = filedialog.askopenfilename(
+            title="Выберите файл для загрузки в комплекс",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if filename:
+            self.upload_file.set(filename)
+            self.log(f"Выбран файл для загрузки: {filename}")
+    
+    def log(self, message):
+        """Добавление сообщения в лог."""
+        self.log_text.insert(tk.END, message + "\n")
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
+    
+    def start_processing(self):
+        """Запуск обработки в отдельном потоке."""
+        if not self.supplier_file.get():
+            messagebox.showerror("Ошибка", "Не выбран файл от поставщика!")
+            return
+        
+        if not self.upload_file.get():
+            messagebox.showerror("Ошибка", "Не выбран файл для загрузки!")
+            return
+        
+        # Блокируем кнопку и запускаем обработку в потоке
+        self.process_btn.config(state="disabled")
+        self.progress_var.set(True)
+        self.status_label.config(text="Обработка данных...")
+        
+        thread = threading.Thread(target=self.process_files)
+        thread.daemon = True
+        thread.start()
+    
+    def process_files(self):
+        """Обработка файлов."""
+        try:
+            self.log("=" * 60)
+            self.log("Начало обработки данных...")
+            
+            # Загрузка файлов
+            self.log("Загрузка файла поставщика...")
+            supplier_df = load_file(self.supplier_file.get())
+            self.log(f"✓ Файл поставщика загружен: {len(supplier_df)} записей")
+            
+            self.log("Загрузка файла для загрузки...")
+            upload_df = load_file(self.upload_file.get())
+            self.log(f"✓ Файл для загрузки загружен: {len(upload_df)} записей")
+            
+            # Обработка данных
+            self.log("Обработка данных...")
+            result_df = process_data(supplier_df, upload_df, log_callback=self.log)
+            
+            if result_df is None:
+                self.log("Ошибка при обработке данных!")
+                self.root.after(0, lambda: messagebox.showerror("Ошибка", "Ошибка при обработке данных!"))
+                return
+            
+            # Формирование имени выходного файла
+            upload_file_path = Path(self.upload_file.get())
+            output_filename = f"{upload_file_path.stem}_processed{upload_file_path.suffix}"
+            output_path = upload_file_path.parent / output_filename
+            
+            self.output_file.set(str(output_path))
+            
+            # Сохранение результата
+            self.log(f"Сохранение результата в: {output_path}")
+            if output_path.suffix.lower() in ['.xlsx', '.xls']:
+                result_df.to_excel(output_path, index=False)
+            else:
+                result_df.to_csv(output_path, index=False, encoding='utf-8-sig')
+            
+            self.log(f"✓ Файл успешно сохранен: {output_path}")
+            self.log("=" * 60)
+            self.log("Обработка завершена успешно!")
+            
+            # Показываем сообщение об успехе
+            self.root.after(0, lambda: messagebox.showinfo(
+                "Успех", 
+                f"Обработка завершена!\n\nРезультат сохранен в:\n{output_path}\n\nВы можете скачать файл с этим именем."
+            ))
+            
+        except Exception as e:
+            error_msg = f"Ошибка: {str(e)}"
+            self.log(error_msg)
+            self.root.after(0, lambda: messagebox.showerror("Ошибка", error_msg))
+        
+        finally:
+            # Разблокируем кнопку
+            self.root.after(0, self.enable_button)
+    
+    def enable_button(self):
+        """Разблокировка кнопки обработки."""
+        self.process_btn.config(state="normal")
+        self.progress_var.set(False)
+        self.status_label.config(text="")
+
+
 def main():
     """Основная функция программы."""
-    print("=" * 60)
-    print("Программа обработки данных от поставщика")
-    print("=" * 60)
-    
-    # Запрос путей к файлам
-    print("\nЗагрузите файл 'Данные от поставщика' (Excel или PDF):")
-    supplier_file = input("Путь к файлу: ").strip()
-    
-    print("\nЗагрузите файл 'Данные для загрузки в комплекс' (Excel):")
-    upload_file = input("Путь к файлу: ").strip()
-    
-    # Проверка существования файлов
-    if not os.path.exists(supplier_file):
-        print(f"Ошибка: Файл '{supplier_file}' не найден!")
-        return
-    
-    if not os.path.exists(upload_file):
-        print(f"Ошибка: Файл '{upload_file}' не найден!")
-        return
-    
-    # Загрузка файлов
-    print("\nЗагрузка файлов...")
-    try:
-        supplier_df = load_file(supplier_file)
-        print(f"✓ Файл поставщика загружен: {len(supplier_df)} записей")
-    except Exception as e:
-        print(f"Ошибка при загрузке файла поставщика: {e}")
-        return
-    
-    try:
-        upload_df = load_file(upload_file)
-        print(f"✓ Файл для загрузки загружен: {len(upload_df)} записей")
-    except Exception as e:
-        print(f"Ошибка при загрузке файла для загрузки: {e}")
-        return
-    
-    # Обработка данных
-    print("\nОбработка данных...")
-    result_df = process_data(supplier_df, upload_df)
-    
-    if result_df is None:
-        print("Ошибка при обработке данных!")
-        return
-    
-    # Формирование имени выходного файла
-    upload_file_path = Path(upload_file)
-    output_filename = f"Данные для загрузки_{upload_file_path.stem}_processed{upload_file_path.suffix}"
-    output_path = Path(upload_file_path.parent) / output_filename
-    
-    # Сохранение результата
-    print(f"\nСохранение результата в: {output_path}")
-    try:
-        if output_path.suffix.lower() in ['.xlsx', '.xls']:
-            result_df.to_excel(output_path, index=False)
-        else:
-            result_df.to_csv(output_path, index=False, encoding='utf-8-sig')
-        print(f"✓ Файл успешно сохранен: {output_path}")
-    except Exception as e:
-        print(f"Ошибка при сохранении файла: {e}")
-        return
-    
-    print("\n" + "=" * 60)
-    print("Обработка завершена успешно!")
-    print(f"Результат: {output_path}")
-    print("=" * 60)
+    root = tk.Tk()
+    app = DataProcessorApp(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
