@@ -18,7 +18,7 @@ import threading
 
 def load_file(file_path):
     """
-    Загрузка файла (Excel или CSV). 
+    Загрузка файла (Excel, CSV, DBF). 
     Для PDF требуется дополнительная библиотека pdfplumber.
     """
     file_ext = Path(file_path).suffix.lower()
@@ -27,6 +27,16 @@ def load_file(file_path):
         return pd.read_excel(file_path)
     elif file_ext == '.csv':
         return pd.read_csv(file_path)
+    elif file_ext == '.dbf':
+        try:
+            from simpledbf import Dbf5
+            dbf = Dbf5(file_path)
+            return dbf.to_dataframe()
+        except ImportError:
+            print("Для работы с DBF установите библиотеку: pip install simpledbf")
+            raise
+        except Exception as e:
+            raise ValueError(f"Ошибка при чтении DBF файла: {str(e)}")
     elif file_ext == '.pdf':
         try:
             import pdfplumber
@@ -236,7 +246,7 @@ class DataProcessorApp:
         file_frame.pack(fill="x", padx=20, pady=10)
         
         # Выбор файла поставщика
-        tk.Label(file_frame, text="Файл от поставщика (Excel/PDF):").grid(row=0, column=0, sticky="w", pady=5)
+        tk.Label(file_frame, text="Файл от поставщика (Excel/DBF/PDF):").grid(row=0, column=0, sticky="w", pady=5)
         tk.Entry(file_frame, textvariable=self.supplier_file, width=50).grid(row=0, column=1, padx=10)
         tk.Button(file_frame, text="Обзор...", command=self.browse_supplier_file).grid(row=0, column=2)
         
@@ -268,7 +278,7 @@ class DataProcessorApp:
         """Выбор файла поставщика."""
         filename = filedialog.askopenfilename(
             title="Выберите файл от поставщика",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("PDF files", "*.pdf"), ("CSV files", "*.csv"), ("All files", "*.*")]
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("DBF files", "*.dbf"), ("PDF files", "*.pdf"), ("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if filename:
             self.supplier_file.set(filename)
