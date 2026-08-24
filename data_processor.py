@@ -32,11 +32,14 @@ def load_file(file_path):
             from simpledbf import Dbf5
             dbf = Dbf5(file_path)
             return dbf.to_dataframe()
-        except ImportError:
-            print("Для работы с DBF установите библиотеку: pip install simpledbf")
-            raise
+        except ImportError as e:
+            error_msg = f"Ошибка импорта simpledbf: {str(e)}. Установите библиотеку: pip install simpledbf"
+            print(error_msg)
+            raise ImportError(error_msg)
         except Exception as e:
-            raise ValueError(f"Ошибка при чтении DBF файла: {str(e)}")
+            error_msg = f"Ошибка при чтении DBF файла: {str(e)}"
+            print(error_msg)
+            raise ValueError(error_msg)
     elif file_ext == '.pdf':
         try:
             import pdfplumber
